@@ -1,6 +1,16 @@
-import { Body, Controller, HttpCode, Logger, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  HttpCode,
+  Logger,
+  Post,
+  Req,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { AivenKafkaService } from './kafka/aiven-kafka.service';
 import { PrismaService } from './prisma.service';
+import { createHmac, timingSafeEqual } from 'crypto';
+import { Request } from 'express';
 
 interface CleanTransactionPayload {
   txHash: string;
@@ -11,6 +21,8 @@ interface CleanTransactionPayload {
   blockNum: string;
   timestamp: Date;
 }
+
+type RequestWithRawBody = Request & { rawBody?: string };
 
 @Controller('alchemy-webhook')
 export class WebhookController {
@@ -25,7 +37,10 @@ export class WebhookController {
   @HttpCode(200)
   async handleAlchemyWebhook(
     @Body() payload: Record<string, unknown>,
+    @Req() req: RequestWithRawBody,
   ): Promise<Record<string, unknown>> {
+    this.verifyWebhookRequest(req, payload);
+
     const transactions = this.extractTransactions(payload);
     if (transactions.length === 0) {
       return { status: 'ignored', message: 'No supported transaction found' };
@@ -53,6 +68,77 @@ export class WebhookController {
       ingested: successCount,
       total: transactions.length,
     };
+  }
+
+  private verifyWebhookRequest(
+    req: RequestWithRawBody,
+    payload: Record<string, unknown>,
+  ): void {
+    const expectedToken = process.env.ALCHEMY_AUTH_TOKEN?.trim();
+    if (expectedToken) {
+      const incomingToken = this.extractIncomingToken(req);
+      if (!incomingToken || incomingToken !== expectedToken) {
+        throw new UnauthorizedException('Invalid auth token');
+      }
+    }
+
+    const signingKey = process.env.ALCHEMY_SIGNING_KEY?.trim();
+    if (!signingKey) {
+      return;
+    }
+
+    const signatureHeader = req.headers['x-alchemy-signature'];
+    const incomingSignature =
+      typeof signatureHeader === 'string'
+        ? signatureHeader.trim()
+        : Array.isArray(signatureHeader)
+          ? (signatureHeader[0] ?? '').trim()
+          : '';
+    if (!incomingSignature) {
+      throw new UnauthorizedException('Missing Alchemy signature');
+    }
+
+    const rawPayload = req.rawBody ?? JSON.stringify(payload);
+    const expectedSignature = createHmac('sha256', signingKey)
+      .update(rawPayload)
+      .digest('hex');
+
+    if (!this.secureCompare(expectedSignature, incomingSignature)) {
+      throw new UnauthorizedException('Invalid Alchemy signature');
+    }
+  }
+
+  private extractIncomingToken(req: RequestWithRawBody): string | null {
+    const headerToken = req.headers['x-alchemy-token'];
+    if (typeof headerToken === 'string' && headerToken.trim().length > 0) {
+      return headerToken.trim();
+    }
+    if (Array.isArray(headerToken) && headerToken[0]?.trim()) {
+      return headerToken[0].trim();
+    }
+
+    const authorizationHeader = req.headers.authorization;
+    if (typeof authorizationHeader === 'string') {
+      const bearerPrefix = 'bearer ';
+      if (authorizationHeader.toLowerCase().startsWith(bearerPrefix)) {
+        const bearerValue = authorizationHeader.slice(bearerPrefix.length).trim();
+        if (bearerValue.length > 0) {
+          return bearerValue;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  private secureCompare(expected: string, incoming: string): boolean {
+    const expectedBuffer = Buffer.from(expected, 'utf8');
+    const incomingBuffer = Buffer.from(incoming, 'utf8');
+    if (expectedBuffer.length !== incomingBuffer.length) {
+      return false;
+    }
+
+    return timingSafeEqual(expectedBuffer, incomingBuffer);
   }
 
   private extractTransactions(
