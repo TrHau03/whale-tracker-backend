@@ -22,6 +22,12 @@ export class AlchemyWebhookAuthService {
 
     const incomingSignature = this.extractSignature(req);
     if (!incomingSignature) {
+      this.logger.warn(
+        `Rejected Alchemy webhook: missing signature header (${this.describeRequest(
+          req,
+          payload,
+        )}).`,
+      );
       throw new UnauthorizedException('Missing Alchemy signature');
     }
 
@@ -31,6 +37,12 @@ export class AlchemyWebhookAuthService {
       .digest('hex');
 
     if (!this.secureCompare(expectedSignature, incomingSignature)) {
+      this.logger.warn(
+        `Rejected Alchemy webhook: signature mismatch (${this.describeRequest(
+          req,
+          payload,
+        )}, incoming=${this.maskSignature(incomingSignature)}, expected=${this.maskSignature(expectedSignature)}, rawBodyLength=${rawPayload.length}).`,
+      );
       throw new UnauthorizedException('Invalid Alchemy signature');
     }
 
@@ -58,5 +70,33 @@ export class AlchemyWebhookAuthService {
     }
 
     return timingSafeEqual(expectedBuffer, incomingBuffer);
+  }
+
+  private describeRequest(
+    req: RequestWithRawBody,
+    payload: Record<string, unknown>,
+  ): string {
+    const eventId =
+      typeof payload.id === 'string' && payload.id.length > 0
+        ? payload.id
+        : 'unknown';
+    const webhookId =
+      typeof payload.webhookId === 'string' && payload.webhookId.length > 0
+        ? payload.webhookId
+        : 'unknown';
+    const contentType =
+      typeof req.headers['content-type'] === 'string'
+        ? req.headers['content-type']
+        : 'unknown';
+
+    return `eventId=${eventId}, webhookId=${webhookId}, contentType=${contentType}`;
+  }
+
+  private maskSignature(signature: string): string {
+    if (signature.length <= 12) {
+      return signature;
+    }
+
+    return `${signature.slice(0, 6)}...${signature.slice(-6)}`;
   }
 }
