@@ -4,19 +4,24 @@ import {
   OnModuleDestroy,
   OnModuleInit,
 } from '@nestjs/common';
-import { Consumer, Kafka, logLevel, Producer, SASLOptions } from 'kafkajs';
+import { Kafka, logLevel, Producer, SASLOptions } from 'kafkajs';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+
+interface PublishKafkaMessageInput {
+  topic?: string;
+  key?: string;
+  value: unknown;
+}
 
 @Injectable()
 export class AivenKafkaService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(AivenKafkaService.name);
   private producer?: Producer;
-  private consumer?: Consumer;
   private ready = false;
 
   private get topicName(): string {
-    return process.env.AIVEN_KAFKA_TOPIC ?? 'raw_txs';
+    return process.env.AIVEN_KAFKA_TOPIC ?? 'alchemy.webhooks';
   }
 
   private getSaslOptions(
@@ -39,25 +44,22 @@ export class AivenKafkaService implements OnModuleInit, OnModuleDestroy {
     const username = process.env.AIVEN_KAFKA_USERNAME;
     const password = process.env.AIVEN_KAFKA_PASSWORD;
     const caLocation = process.env.AIVEN_KAFKA_CA_LOCATION ?? 'ca.pem';
-    const certLocation = process.env.AIVEN_KAFKA_CERT_LOCATION ?? 'service.cert';
+    const certLocation =
+      process.env.AIVEN_KAFKA_CERT_LOCATION ?? 'service.cert';
     const keyLocation = process.env.AIVEN_KAFKA_KEY_LOCATION ?? 'service.key';
-    const groupId = process.env.AIVEN_KAFKA_GROUP_ID ?? 'whale-tracker-group';
-    const consumerEnabled = process.env.AIVEN_KAFKA_CONSUMER_ENABLED === 'true';
     const saslMechanism =
       process.env.AIVEN_KAFKA_SASL_MECHANISM ?? 'SCRAM-SHA-256';
     const enabled = process.env.AIVEN_KAFKA_ENABLED === 'true';
 
     if (!enabled) {
       this.logger.log(
-        'Aiven Kafka is disabled. Set AIVEN_KAFKA_ENABLED=true to start producer/consumer.',
+        'Aiven Kafka is disabled. Set AIVEN_KAFKA_ENABLED=true to start the producer.',
       );
       return;
     }
 
     if (!broker) {
-      this.logger.warn(
-        'Missing Kafka broker. Set AIVEN_KAFKA_BROKER.',
-      );
+      this.logger.warn('Missing Kafka broker. Set AIVEN_KAFKA_BROKER.');
       return;
     }
 
@@ -93,22 +95,6 @@ export class AivenKafkaService implements OnModuleInit, OnModuleDestroy {
       this.producer = producer;
       this.ready = true;
       this.logger.log(`Kafka producer connected (${this.topicName}).`);
-
-      if (!consumerEnabled) {
-        return;
-      }
-
-      const consumer = kafka.consumer({ groupId });
-      await consumer.connect();
-      await consumer.subscribe({ topic: this.topicName, fromBeginning: true });
-      await consumer.run({
-        eachMessage: async ({ message }) => {
-          await Promise.resolve();
-          this.logger.log(`Got message: ${message.value?.toString() ?? ''}`);
-        },
-      });
-      this.consumer = consumer;
-      this.logger.log(`Kafka consumer connected (${this.topicName}).`);
     } catch (error) {
       const msg =
         error instanceof Error ? error.message : 'Unknown Kafka init error';
@@ -119,23 +105,34 @@ export class AivenKafkaService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async sendMessage(message: string): Promise<void> {
+  async publish({
+    topic,
+    key,
+    value,
+  }: PublishKafkaMessageInput): Promise<void> {
     if (!this.producer || !this.ready) {
-      this.logger.warn('Kafka producer is not connected yet.');
-      return;
+      throw new Error('Kafka producer is not connected yet.');
     }
 
+    const messageValue =
+      typeof value === 'string' ? value : JSON.stringify(value);
+
     await this.producer.send({
-      topic: this.topicName,
-      messages: [{ value: message }],
+      topic: topic ?? this.topicName,
+      messages: [{ key, value: messageValue }],
     });
 
-    this.logger.log(`Message sent: ${message}`);
+    this.logger.log(`Message sent to topic ${topic ?? this.topicName}.`);
+  }
+
+  async sendMessage(message: string): Promise<void> {
+    await this.publish({
+      value: message,
+    });
   }
 
   async onModuleDestroy(): Promise<void> {
     this.ready = false;
-    await this.consumer?.disconnect();
     await this.producer?.disconnect();
   }
 }

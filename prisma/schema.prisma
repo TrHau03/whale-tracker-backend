@@ -26,3 +26,76 @@ model Transaction {
   riskScore   Float?
   insertedAt  DateTime @default(now())
 }
+
+enum KafkaOutboxStatus {
+  PENDING
+  PROCESSING
+  PUBLISHED
+  FAILED
+}
+
+model WebhookEvent {
+  id             String            @id @default(cuid())
+  eventId        String            @unique
+  webhookId      String
+  eventType      String
+  network        String?
+  sequenceNumber String?
+  createdAt      DateTime
+  receivedAt     DateTime          @default(now())
+  signature      String?
+  rawBody        String
+  payload        Json
+  activities     WebhookActivity[]
+  outboxMessages KafkaOutbox[]
+
+  @@index([webhookId, createdAt])
+  @@index([eventType, createdAt])
+}
+
+model WebhookActivity {
+  id             String       @id @default(cuid())
+  webhookEventId String
+  sourceKind     String
+  activityIndex  Int
+  txHash         String?
+  blockNum       String?
+  category       String?
+  fromAddress    String?
+  toAddress      String?
+  assetSymbol    String?
+  assetAddress   String?
+  rawValue       String?
+  value          Decimal?     @db.Decimal(78, 18)
+  tokenId        String?
+  logIndex       String?
+  removed        Boolean?
+  payload        Json
+  createdAt      DateTime     @default(now())
+  webhookEvent   WebhookEvent @relation(fields: [webhookEventId], references: [id], onDelete: Cascade)
+
+  @@unique([webhookEventId, activityIndex])
+  @@index([txHash])
+  @@index([blockNum])
+  @@index([assetAddress])
+}
+
+model KafkaOutbox {
+  id             String            @id @default(cuid())
+  dedupeKey      String            @unique
+  topic          String
+  messageKey     String?
+  payload        Json
+  status         KafkaOutboxStatus @default(PENDING)
+  attempts       Int               @default(0)
+  availableAt    DateTime          @default(now())
+  publishedAt    DateTime?
+  lastError      String?
+  webhookEventId String
+  webhookEvent   WebhookEvent      @relation(fields: [webhookEventId], references: [id], onDelete: Cascade)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  @@index([status, availableAt, createdAt])
+  @@index([webhookEventId])
+}
