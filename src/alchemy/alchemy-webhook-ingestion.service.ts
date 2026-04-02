@@ -28,81 +28,17 @@ export class AlchemyWebhookIngestionService {
     },
   ): Promise<WebhookIngestionResult> {
     const normalizedEvent = this.normalizerService.normalize(payload);
-    const existingEvent = await this.prismaService.webhookEvent.findUnique({
-      where: {
-        eventId: normalizedEvent.eventId,
-      },
-      include: {
-        activities: {
-          select: {
-            id: true,
-          },
-        },
-      },
-    });
-
-    if (existingEvent) {
-      void this.outboxProcessorService.processPendingMessages();
-      return {
-        status: 'duplicate',
-        eventId: existingEvent.eventId,
-        activitiesStored: existingEvent.activities.length,
-      };
-    }
-
     const receivedAt = new Date();
+    const webhookEventCreateInput = this.buildWebhookEventCreateInput(
+      normalizedEvent,
+      payload,
+      receivedAt,
+      options,
+    );
 
     try {
-      await this.prismaService.$transaction(async (tx) => {
-        const webhookEvent = await tx.webhookEvent.create({
-          data: {
-            eventId: normalizedEvent.eventId,
-            webhookId: normalizedEvent.webhookId,
-            eventType: normalizedEvent.eventType,
-            network: normalizedEvent.network,
-            sequenceNumber: normalizedEvent.sequenceNumber,
-            createdAt: normalizedEvent.createdAt,
-            receivedAt,
-            signature: options?.signature,
-            rawBody: options?.rawBody ?? JSON.stringify(payload),
-            payload: this.toJsonValue(normalizedEvent.rawPayload),
-          },
-        });
-
-        if (normalizedEvent.activities.length > 0) {
-          await tx.webhookActivity.createMany({
-            data: normalizedEvent.activities.map((activity) => ({
-              webhookEventId: webhookEvent.id,
-              sourceKind: activity.sourceKind,
-              activityIndex: activity.activityIndex,
-              txHash: activity.txHash,
-              blockNum: activity.blockNum,
-              category: activity.category,
-              fromAddress: activity.fromAddress,
-              toAddress: activity.toAddress,
-              assetSymbol: activity.assetSymbol,
-              assetAddress: activity.assetAddress,
-              rawValue: activity.rawValue,
-              value: activity.value,
-              tokenId: activity.tokenId,
-              logIndex: activity.logIndex,
-              removed: activity.removed,
-              payload: this.toJsonValue(activity.payload),
-            })),
-          });
-        }
-
-        await tx.kafkaOutbox.create({
-          data: {
-            dedupeKey: `alchemy:${normalizedEvent.eventId}`,
-            topic: this.getKafkaTopic(),
-            messageKey: normalizedEvent.eventId,
-            payload: this.toJsonValue(
-              this.buildKafkaMessage(normalizedEvent, receivedAt),
-            ),
-            webhookEventId: webhookEvent.id,
-          },
-        });
+      await this.prismaService.webhookEvent.create({
+        data: webhookEventCreateInput,
       });
     } catch (error) {
       if (this.isDuplicateEventError(error)) {
@@ -122,6 +58,64 @@ export class AlchemyWebhookIngestionService {
       status: 'accepted',
       eventId: normalizedEvent.eventId,
       activitiesStored: normalizedEvent.activities.length,
+    };
+  }
+
+  private buildWebhookEventCreateInput(
+    normalizedEvent: AlchemyWebhookEnvelope,
+    payload: Record<string, unknown>,
+    receivedAt: Date,
+    options?: {
+      rawBody?: string;
+      signature?: string;
+    },
+  ): Prisma.WebhookEventCreateInput {
+    const activities = normalizedEvent.activities.map((activity) => ({
+      sourceKind: activity.sourceKind,
+      activityIndex: activity.activityIndex,
+      txHash: activity.txHash,
+      blockNum: activity.blockNum,
+      category: activity.category,
+      fromAddress: activity.fromAddress,
+      toAddress: activity.toAddress,
+      assetSymbol: activity.assetSymbol,
+      assetAddress: activity.assetAddress,
+      rawValue: activity.rawValue,
+      value: activity.value,
+      tokenId: activity.tokenId,
+      logIndex: activity.logIndex,
+      removed: activity.removed,
+      payload: this.toJsonValue(activity.payload),
+    }));
+    const kafkaMessage = this.buildKafkaMessage(normalizedEvent, receivedAt);
+
+    return {
+      eventId: normalizedEvent.eventId,
+      webhookId: normalizedEvent.webhookId,
+      eventType: normalizedEvent.eventType,
+      network: normalizedEvent.network,
+      sequenceNumber: normalizedEvent.sequenceNumber,
+      createdAt: normalizedEvent.createdAt,
+      receivedAt,
+      signature: options?.signature,
+      rawBody: options?.rawBody ?? JSON.stringify(payload),
+      payload: this.toJsonValue(normalizedEvent.rawPayload),
+      activities:
+        activities.length > 0
+          ? {
+              createMany: {
+                data: activities,
+              },
+            }
+          : undefined,
+      outboxMessages: {
+        create: {
+          dedupeKey: `alchemy:${normalizedEvent.eventId}`,
+          topic: this.getKafkaTopic(),
+          messageKey: normalizedEvent.eventId,
+          payload: this.toJsonValue(kafkaMessage),
+        },
+      },
     };
   }
 
@@ -198,8 +192,10 @@ export class AlchemyWebhookIngestionService {
 
   private isDuplicateEventError(error: unknown): boolean {
     return (
-      error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === 'P2002'
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      (error as { code?: string }).code === 'P2002'
     );
   }
 

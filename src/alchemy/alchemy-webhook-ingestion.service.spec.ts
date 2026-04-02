@@ -10,22 +10,11 @@ describe('AlchemyWebhookIngestionService', () => {
   const outboxProcessorService = {
     processPendingMessages: jest.fn(),
   };
-  const prismaTransaction = {
-    webhookEvent: {
-      create: jest.fn(),
-    },
-    webhookActivity: {
-      createMany: jest.fn(),
-    },
-    kafkaOutbox: {
-      create: jest.fn(),
-    },
-  };
   const prismaService = {
     webhookEvent: {
+      create: jest.fn(),
       findUnique: jest.fn(),
     },
-    $transaction: jest.fn(),
   };
 
   let service: AlchemyWebhookIngestionService;
@@ -33,11 +22,7 @@ describe('AlchemyWebhookIngestionService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
 
-    prismaService.$transaction.mockImplementation(
-      async (callback: (tx: typeof prismaTransaction) => Promise<void>) =>
-        callback(prismaTransaction),
-    );
-    prismaTransaction.webhookEvent.create.mockResolvedValue({
+    prismaService.webhookEvent.create.mockResolvedValue({
       id: 'db_event_1',
     });
     outboxProcessorService.processPendingMessages.mockResolvedValue(1);
@@ -49,8 +34,7 @@ describe('AlchemyWebhookIngestionService', () => {
     );
   });
 
-  it('stores new webhook events, activities, and one Kafka outbox message', async () => {
-    prismaService.webhookEvent.findUnique.mockResolvedValue(null);
+  it('stores a new webhook event with nested activities and one outbox message', async () => {
     normalizerService.normalize.mockReturnValue({
       eventId: 'whevt_1',
       webhookId: 'wh_1',
@@ -84,21 +68,26 @@ describe('AlchemyWebhookIngestionService', () => {
       eventId: 'whevt_1',
       activitiesStored: 1,
     });
-    expect(prismaService.$transaction).toHaveBeenCalledTimes(1);
-    expect(prismaTransaction.webhookEvent.create).toHaveBeenCalled();
-    expect(prismaTransaction.webhookActivity.createMany).toHaveBeenCalledWith({
-      data: [
-        expect.objectContaining({
-          webhookEventId: 'db_event_1',
-          txHash: '0xtx',
-          value: '1.25',
-        }),
-      ],
-    });
-    expect(prismaTransaction.kafkaOutbox.create).toHaveBeenCalledWith({
+    expect(prismaService.webhookEvent.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
-        dedupeKey: 'alchemy:whevt_1',
-        messageKey: 'whevt_1',
+        eventId: 'whevt_1',
+        webhookId: 'wh_1',
+        outboxMessages: {
+          create: expect.objectContaining({
+            dedupeKey: 'alchemy:whevt_1',
+            messageKey: 'whevt_1',
+          }),
+        },
+        activities: {
+          createMany: {
+            data: [
+              expect.objectContaining({
+                txHash: '0xtx',
+                value: '1.25',
+              }),
+            ],
+          },
+        },
       }),
     });
     expect(outboxProcessorService.processPendingMessages).toHaveBeenCalledTimes(
@@ -106,7 +95,7 @@ describe('AlchemyWebhookIngestionService', () => {
     );
   });
 
-  it('treats an existing event id as a duplicate and skips persistence', async () => {
+  it('treats a unique-constraint conflict as a duplicate event', async () => {
     normalizerService.normalize.mockReturnValue({
       eventId: 'whevt_1',
       webhookId: 'wh_1',
@@ -116,6 +105,9 @@ describe('AlchemyWebhookIngestionService', () => {
         id: 'whevt_1',
       },
       activities: [],
+    });
+    prismaService.webhookEvent.create.mockRejectedValue({
+      code: 'P2002',
     });
     prismaService.webhookEvent.findUnique.mockResolvedValue({
       eventId: 'whevt_1',
@@ -129,7 +121,19 @@ describe('AlchemyWebhookIngestionService', () => {
       eventId: 'whevt_1',
       activitiesStored: 2,
     });
-    expect(prismaService.$transaction).not.toHaveBeenCalled();
+    expect(prismaService.webhookEvent.create).toHaveBeenCalledTimes(1);
+    expect(prismaService.webhookEvent.findUnique).toHaveBeenCalledWith({
+      where: {
+        eventId: 'whevt_1',
+      },
+      include: {
+        activities: {
+          select: {
+            id: true,
+          },
+        },
+      },
+    });
     expect(outboxProcessorService.processPendingMessages).toHaveBeenCalledTimes(
       1,
     );
