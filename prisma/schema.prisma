@@ -5,11 +5,24 @@
 // Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
 
 generator client {
-  provider = "prisma-client"
-  output   = "../generated/prisma"
+  provider = "prisma-client-js"
 }
 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+model Transaction {
+  id          String   @id @default(uuid())
+  txHash      String   @unique
+  fromAddress String
+  toAddress   String
+  asset       String
+  value       Float
+  blockNum    String
+  timestamp   DateTime
+  isAnomaly   Boolean  @default(false)
+  riskScore   Float?
+  insertedAt  DateTime @default(now())
 }

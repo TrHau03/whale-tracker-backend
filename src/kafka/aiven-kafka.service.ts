@@ -5,7 +5,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { Consumer, Kafka, logLevel, Producer, SASLOptions } from 'kafkajs';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 @Injectable()
@@ -39,6 +39,8 @@ export class AivenKafkaService implements OnModuleInit, OnModuleDestroy {
     const username = process.env.AIVEN_KAFKA_USERNAME;
     const password = process.env.AIVEN_KAFKA_PASSWORD;
     const caLocation = process.env.AIVEN_KAFKA_CA_LOCATION ?? 'ca.pem';
+    const certLocation = process.env.AIVEN_KAFKA_CERT_LOCATION ?? 'service.cert';
+    const keyLocation = process.env.AIVEN_KAFKA_KEY_LOCATION ?? 'service.key';
     const groupId = process.env.AIVEN_KAFKA_GROUP_ID ?? 'whale-tracker-group';
     const saslMechanism =
       process.env.AIVEN_KAFKA_SASL_MECHANISM ?? 'SCRAM-SHA-256';
@@ -51,20 +53,34 @@ export class AivenKafkaService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    if (!broker || !username || !password) {
+    if (!broker) {
       this.logger.warn(
-        'Missing Kafka credentials. Set AIVEN_KAFKA_BROKER, AIVEN_KAFKA_USERNAME, AIVEN_KAFKA_PASSWORD.',
+        'Missing Kafka broker. Set AIVEN_KAFKA_BROKER.',
       );
       return;
     }
+
+    const hasSasl = Boolean(username && password);
+    const hasClientCertificates =
+      existsSync(resolve(process.cwd(), certLocation)) &&
+      existsSync(resolve(process.cwd(), keyLocation));
 
     const kafka = new Kafka({
       clientId: 'whale-tracker-backend',
       brokers: [broker],
       ssl: {
         ca: [readFileSync(resolve(process.cwd(), caLocation), 'utf8')],
+        cert: hasClientCertificates
+          ? readFileSync(resolve(process.cwd(), certLocation), 'utf8')
+          : undefined,
+        key: hasClientCertificates
+          ? readFileSync(resolve(process.cwd(), keyLocation), 'utf8')
+          : undefined,
       },
-      sasl: this.getSaslOptions(saslMechanism, username, password),
+      sasl:
+        hasSasl && username && password
+          ? this.getSaslOptions(saslMechanism, username, password)
+          : undefined,
       logLevel: logLevel.NOTHING,
     });
 
