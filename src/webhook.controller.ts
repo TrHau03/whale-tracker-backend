@@ -59,8 +59,7 @@ export class WebhookController {
     payload: Record<string, unknown>,
   ): CleanTransactionPayload[] {
     const createdAtRaw = payload.createdAt;
-    const createdAt =
-      typeof createdAtRaw === 'string' ? new Date(createdAtRaw) : new Date();
+    const createdAt = this.parseDate(createdAtRaw) ?? new Date();
 
     const transactionsFromEvent = this.extractFromAddressActivity(payload);
     if (transactionsFromEvent.length > 0) {
@@ -68,6 +67,11 @@ export class WebhookController {
         ...item,
         timestamp: createdAt,
       }));
+    }
+
+    const transactionsFromBlockLogs = this.extractFromCustomBlockLogs(payload);
+    if (transactionsFromBlockLogs.length > 0) {
+      return transactionsFromBlockLogs;
     }
 
     const single = this.extractFromRawTransferLog(payload, createdAt);
@@ -163,6 +167,95 @@ export class WebhookController {
       blockNum: String(blockNum),
       timestamp,
     };
+  }
+
+  private extractFromCustomBlockLogs(
+    payload: Record<string, unknown>,
+  ): CleanTransactionPayload[] {
+    const block = payload.block;
+    if (!block || typeof block !== 'object') {
+      return [];
+    }
+
+    const blockData = block as Record<string, unknown>;
+    const logs = blockData.logs;
+    if (!Array.isArray(logs)) {
+      return [];
+    }
+
+    const blockTimestamp = this.parseDate(blockData.timestamp) ?? new Date();
+    const blockNumberRaw = blockData.number;
+    const blockNumber =
+      typeof blockNumberRaw === 'number'
+        ? String(blockNumberRaw)
+        : typeof blockNumberRaw === 'string'
+          ? blockNumberRaw
+          : undefined;
+
+    const cleanItems: CleanTransactionPayload[] = [];
+    for (const log of logs) {
+      if (!log || typeof log !== 'object') {
+        continue;
+      }
+
+      const logData = log as Record<string, unknown>;
+      const transaction = logData.transaction;
+      if (!transaction || typeof transaction !== 'object') {
+        continue;
+      }
+
+      const tx = transaction as Record<string, unknown>;
+      const hash = tx.hash;
+      const from = tx.from as { address?: string } | undefined;
+      const to = tx.to as { address?: string } | undefined;
+      const account = logData.account as { address?: string } | undefined;
+      const rawValue = logData.data;
+      const txNonce = tx.nonce;
+
+      let resolvedBlockNum = blockNumber;
+      if (!resolvedBlockNum) {
+        if (typeof txNonce === 'number') {
+          resolvedBlockNum = String(txNonce);
+        } else if (typeof txNonce === 'string') {
+          resolvedBlockNum = txNonce;
+        }
+      }
+
+      if (
+        typeof hash !== 'string' ||
+        typeof from?.address !== 'string' ||
+        typeof to?.address !== 'string' ||
+        typeof resolvedBlockNum !== 'string'
+      ) {
+        continue;
+      }
+
+      const assetAddress = account?.address ?? 'UNKNOWN_ASSET';
+      const decimals = this.getAssetDecimals(assetAddress);
+      const cleanValue = this.hexToDecimal(rawValue, decimals);
+
+      cleanItems.push({
+        txHash: hash,
+        fromAddress: from.address,
+        toAddress: to.address,
+        asset: assetAddress,
+        value: cleanValue,
+        blockNum: resolvedBlockNum,
+        timestamp: blockTimestamp,
+      });
+    }
+
+    return cleanItems;
+  }
+
+  private parseDate(value: unknown): Date | null {
+    if (typeof value === 'string' || typeof value === 'number') {
+      const parsed = new Date(value);
+      if (!Number.isNaN(parsed.getTime())) {
+        return parsed;
+      }
+    }
+    return null;
   }
 
   private getAssetDecimals(assetAddress: string): number {

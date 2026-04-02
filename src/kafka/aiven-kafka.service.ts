@@ -42,6 +42,7 @@ export class AivenKafkaService implements OnModuleInit, OnModuleDestroy {
     const certLocation = process.env.AIVEN_KAFKA_CERT_LOCATION ?? 'service.cert';
     const keyLocation = process.env.AIVEN_KAFKA_KEY_LOCATION ?? 'service.key';
     const groupId = process.env.AIVEN_KAFKA_GROUP_ID ?? 'whale-tracker-group';
+    const consumerEnabled = process.env.AIVEN_KAFKA_CONSUMER_ENABLED === 'true';
     const saslMechanism =
       process.env.AIVEN_KAFKA_SASL_MECHANISM ?? 'SCRAM-SHA-256';
     const enabled = process.env.AIVEN_KAFKA_ENABLED === 'true';
@@ -85,10 +86,19 @@ export class AivenKafkaService implements OnModuleInit, OnModuleDestroy {
     });
 
     const producer = kafka.producer();
-    const consumer = kafka.consumer({ groupId });
 
     try {
       await producer.connect();
+
+      this.producer = producer;
+      this.ready = true;
+      this.logger.log(`Kafka producer connected (${this.topicName}).`);
+
+      if (!consumerEnabled) {
+        return;
+      }
+
+      const consumer = kafka.consumer({ groupId });
       await consumer.connect();
       await consumer.subscribe({ topic: this.topicName, fromBeginning: true });
       await consumer.run({
@@ -97,15 +107,15 @@ export class AivenKafkaService implements OnModuleInit, OnModuleDestroy {
           this.logger.log(`Got message: ${message.value?.toString() ?? ''}`);
         },
       });
-
-      this.producer = producer;
       this.consumer = consumer;
-      this.ready = true;
-      this.logger.log(`Kafka producer/consumer connected (${this.topicName}).`);
+      this.logger.log(`Kafka consumer connected (${this.topicName}).`);
     } catch (error) {
       const msg =
         error instanceof Error ? error.message : 'Unknown Kafka init error';
       this.logger.error(`Kafka connect failed: ${msg}`);
+      this.logger.error(
+        `Check AIVEN_KAFKA_TOPIC=${this.topicName} exists and Render env values are correct.`,
+      );
     }
   }
 
