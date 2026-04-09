@@ -228,6 +228,8 @@ export class AlchemyWebhookNormalizerService {
     transaction?: JsonRecord,
     blockNumber?: string,
   ): NormalizedWebhookActivity {
+    const accountAddress = this.asString(this.readPath(log, ['account', 'address']));
+
     return {
       activityIndex,
       sourceKind: 'GRAPHQL_LOG',
@@ -243,9 +245,22 @@ export class AlchemyWebhookNormalizerService {
       ),
       toAddress: this.asString(this.readPath(transaction, ['to', 'address'])),
       assetAddress:
-        this.asString(this.readPath(log, ['account', 'address'])) ??
-        this.asString(log.address),
-      rawValue: this.asString(log.data),
+        accountAddress ?? this.asString(log.address),
+      rawValue:
+        this.asString(log.data) ?? this.asString(transaction?.value),
+      accountAddress,
+      txIndex: this.asInteger(transaction?.index),
+      gasPrice: this.asString(transaction?.gasPrice),
+      maxFeePerGas: this.asString(transaction?.maxFeePerGas),
+      maxPriorityFeePerGas: this.asString(transaction?.maxPriorityFeePerGas),
+      gas: this.asInteger(transaction?.gas),
+      txStatus: this.asInteger(transaction?.status),
+      gasUsed: this.asInteger(transaction?.gasUsed),
+      cumulativeGasUsed: this.asInteger(transaction?.cumulativeGasUsed),
+      effectiveGasPrice: this.asString(transaction?.effectiveGasPrice),
+      createdContract: this.asString(
+        this.readPath(transaction, ['createdContract', 'address']),
+      ),
       logIndex: this.stringifyValue(log.index) ?? this.asString(log.logIndex),
       removed: this.asBoolean(log.removed),
       payload: log,
@@ -353,6 +368,29 @@ export class AlchemyWebhookNormalizerService {
     return typeof value === 'number' && Number.isFinite(value)
       ? value
       : undefined;
+  }
+
+  private asInteger(value: unknown): number | undefined {
+    if (typeof value === 'number' && Number.isInteger(value)) {
+      return value;
+    }
+
+    if (typeof value === 'string') {
+      const raw = value.trim();
+      if (raw.length === 0) {
+        return undefined;
+      }
+
+      if (/^0x[0-9a-f]+$/i.test(raw)) {
+        const parsedHex = Number.parseInt(raw, 16);
+        return Number.isInteger(parsedHex) ? parsedHex : undefined;
+      }
+
+      const parsed = Number.parseInt(raw, 10);
+      return Number.isInteger(parsed) ? parsed : undefined;
+    }
+
+    return undefined;
   }
 
   private asBoolean(value: unknown): boolean | undefined {

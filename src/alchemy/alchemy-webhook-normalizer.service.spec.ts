@@ -69,12 +69,25 @@ describe('AlchemyWebhookNormalizerService', () => {
             logs: [
               {
                 transaction: {
+                  index: 0,
                   hash: '0xtxhash',
                   from: {
                     address: '0xfrom',
                   },
                   to: {
                     address: '0xto',
+                  },
+                  value: '0x0',
+                  gasPrice: '0xbf20f6b',
+                  maxFeePerGas: '0x1733fdc4',
+                  maxPriorityFeePerGas: '0x0',
+                  gas: 454006,
+                  status: 1,
+                  gasUsed: 247738,
+                  cumulativeGasUsed: 247738,
+                  effectiveGasPrice: '0xbf20f6b',
+                  createdContract: {
+                    address: '0xcreated',
                   },
                   logs: [
                     {
@@ -102,10 +115,21 @@ describe('AlchemyWebhookNormalizerService', () => {
       fromAddress: '0xfrom',
       toAddress: '0xto',
       assetAddress: '0xcontract',
-      rawValue: '0x10',
+      rawValue: '0x10', // prefer log.data when present
       blockNum: '0xdf34a3',
       logIndex: '239',
       removed: false,
+      accountAddress: '0xcontract',
+      txIndex: 0,
+      gasPrice: '0xbf20f6b',
+      maxFeePerGas: '0x1733fdc4',
+      maxPriorityFeePerGas: '0x0',
+      gas: 454006,
+      txStatus: 1,
+      gasUsed: 247738,
+      cumulativeGasUsed: 247738,
+      effectiveGasPrice: '0xbf20f6b',
+      createdContract: '0xcreated',
     });
   });
 });

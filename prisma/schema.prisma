@@ -54,30 +54,42 @@ model WebhookEvent {
 }
 
 model WebhookActivity {
-  id             String       @id @default(cuid())
-  webhookEventId String
-  sourceKind     String
-  activityIndex  Int
-  txHash         String?
-  blockNum       String?
-  category       String?
-  fromAddress    String?
-  toAddress      String?
-  assetSymbol    String?
-  assetAddress   String?
-  rawValue       String?
-  value          Decimal?     @db.Decimal(78, 18)
-  tokenId        String?
-  logIndex       String?
-  removed        Boolean?
-  payload        Json
-  createdAt      DateTime     @default(now())
-  webhookEvent   WebhookEvent @relation(fields: [webhookEventId], references: [id], onDelete: Cascade)
+  id                   String       @id @default(cuid())
+  webhookEventId       String
+  sourceKind           String
+  activityIndex        Int
+  txHash               String?
+  blockNum             String?
+  category             String?
+  fromAddress          String?
+  toAddress            String?
+  assetSymbol          String?
+  assetAddress         String?
+  rawValue             String?
+  value                Decimal?     @db.Decimal(78, 18)
+  accountAddress       String?
+  txIndex              Int?
+  gasPrice             String?
+  maxFeePerGas         String?
+  maxPriorityFeePerGas String?
+  gas                  Int?
+  txStatus             Int?
+  gasUsed              Int?
+  cumulativeGasUsed    Int?
+  effectiveGasPrice    String?
+  createdContract      String?
+  tokenId              String?
+  logIndex             String?
+  removed              Boolean?
+  payload              Json
+  createdAt            DateTime     @default(now())
+  webhookEvent         WebhookEvent @relation(fields: [webhookEventId], references: [id], onDelete: Cascade)
 
   @@unique([webhookEventId, activityIndex])
   @@index([txHash])
   @@index([blockNum])
   @@index([assetAddress])
+  @@index([accountAddress])
 }
 
 model KafkaOutbox {
