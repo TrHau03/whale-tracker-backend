@@ -26,6 +26,9 @@ export class OutboxProcessorService implements OnModuleInit, OnModuleDestroy {
     }
 
     const intervalMs = this.getPollIntervalMs();
+    this.logger.log(
+      `Kafka outbox processor started (interval=${intervalMs}ms, batchSize=${this.getBatchSize()}).`,
+    );
     this.pollTimer = setInterval(() => {
       void this.processPendingMessages();
     }, intervalMs);
@@ -61,6 +64,11 @@ export class OutboxProcessorService implements OnModuleInit, OnModuleDestroy {
         take: this.getBatchSize(),
       });
 
+      if (candidates.length === 0) {
+        return 0;
+      }
+
+      this.logger.log(`Outbox fetched ${candidates.length} pending message(s).`);
       let publishedCount = 0;
 
       for (const candidate of candidates) {
@@ -138,6 +146,9 @@ export class OutboxProcessorService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
+      if (publishedCount > 0) {
+        this.logger.log(`Outbox published ${publishedCount} message(s).`);
+      }
       return publishedCount;
     } finally {
       this.processing = false;

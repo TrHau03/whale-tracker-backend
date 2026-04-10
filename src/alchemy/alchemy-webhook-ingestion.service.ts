@@ -29,6 +29,9 @@ export class AlchemyWebhookIngestionService {
   ): Promise<WebhookIngestionResult> {
     const normalizedEvent = this.normalizerService.normalize(payload);
     const receivedAt = new Date();
+    this.logger.log(
+      `Start ingestion: eventId=${normalizedEvent.eventId}, type=${normalizedEvent.eventType}, activities=${normalizedEvent.activities.length}`,
+    );
     const webhookEventCreateInput = this.buildWebhookEventCreateInput(
       normalizedEvent,
       payload,
@@ -45,20 +48,45 @@ export class AlchemyWebhookIngestionService {
         this.logger.warn(
           `Webhook event ${normalizedEvent.eventId} was inserted concurrently and treated as duplicate.`,
         );
-        void this.outboxProcessorService.processPendingMessages();
+        this.triggerOutboxProcessing(normalizedEvent.eventId);
         return this.loadDuplicateResult(normalizedEvent.eventId);
       }
 
+      const message =
+        error instanceof Error ? error.message : 'Unknown ingestion error';
+      this.logger.error(
+        `Failed ingestion for eventId=${normalizedEvent.eventId}: ${message}`,
+      );
       throw error;
     }
 
-    void this.outboxProcessorService.processPendingMessages();
+    this.logger.log(
+      `Stored webhook event: eventId=${normalizedEvent.eventId}, activities=${normalizedEvent.activities.length}`,
+    );
+    this.triggerOutboxProcessing(normalizedEvent.eventId);
 
     return {
       status: 'accepted',
       eventId: normalizedEvent.eventId,
       activitiesStored: normalizedEvent.activities.length,
     };
+  }
+
+  private triggerOutboxProcessing(eventId: string): void {
+    void this.outboxProcessorService
+      .processPendingMessages()
+      .then((publishedCount) => {
+        this.logger.log(
+          `Outbox run completed for eventId=${eventId}, published=${publishedCount}`,
+        );
+      })
+      .catch((error) => {
+        const message =
+          error instanceof Error ? error.message : 'Unknown outbox error';
+        this.logger.error(
+          `Outbox run failed for eventId=${eventId}: ${message}`,
+        );
+      });
   }
 
   private buildWebhookEventCreateInput(
