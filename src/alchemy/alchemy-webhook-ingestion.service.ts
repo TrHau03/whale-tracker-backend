@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { AivenKafkaService } from '../kafka/aiven-kafka.service';
 import { PrismaService } from '../prisma.service';
-import { OutboxProcessorService } from '../outbox/outbox-processor.service';
 import { AlchemyWebhookNormalizerService } from './alchemy-webhook-normalizer.service';
 import {
   AlchemyWebhookEnvelope,
@@ -16,8 +16,8 @@ export class AlchemyWebhookIngestionService {
 
   constructor(
     private readonly prismaService: PrismaService,
+    private readonly kafkaService: AivenKafkaService,
     private readonly normalizerService: AlchemyWebhookNormalizerService,
-    private readonly outboxProcessorService: OutboxProcessorService,
   ) {}
 
   async ingest(
@@ -48,7 +48,6 @@ export class AlchemyWebhookIngestionService {
         this.logger.warn(
           `Webhook event ${normalizedEvent.eventId} was inserted concurrently and treated as duplicate.`,
         );
-        this.triggerOutboxProcessing(normalizedEvent.eventId);
         return this.loadDuplicateResult(normalizedEvent.eventId);
       }
 
@@ -63,30 +62,13 @@ export class AlchemyWebhookIngestionService {
     this.logger.log(
       `Stored webhook event: eventId=${normalizedEvent.eventId}, activities=${normalizedEvent.activities.length}`,
     );
-    this.triggerOutboxProcessing(normalizedEvent.eventId);
+    await this.publishToKafka(normalizedEvent, receivedAt);
 
     return {
       status: 'accepted',
       eventId: normalizedEvent.eventId,
       activitiesStored: normalizedEvent.activities.length,
     };
-  }
-
-  private triggerOutboxProcessing(eventId: string): void {
-    void this.outboxProcessorService
-      .processPendingMessages()
-      .then((publishedCount) => {
-        this.logger.log(
-          `Outbox run completed for eventId=${eventId}, published=${publishedCount}`,
-        );
-      })
-      .catch((error) => {
-        const message =
-          error instanceof Error ? error.message : 'Unknown outbox error';
-        this.logger.error(
-          `Outbox run failed for eventId=${eventId}: ${message}`,
-        );
-      });
   }
 
   private buildWebhookEventCreateInput(
@@ -126,8 +108,6 @@ export class AlchemyWebhookIngestionService {
       removed: activity.removed,
       payload: this.toJsonValue(activity.payload),
     }));
-    const kafkaMessage = this.buildKafkaMessage(normalizedEvent, receivedAt);
-
     return {
       eventId: normalizedEvent.eventId,
       webhookId: normalizedEvent.webhookId,
@@ -147,14 +127,6 @@ export class AlchemyWebhookIngestionService {
               },
             }
           : undefined,
-      outboxMessages: {
-        create: {
-          dedupeKey: `alchemy:${normalizedEvent.eventId}`,
-          topic: this.getKafkaTopic(),
-          messageKey: normalizedEvent.eventId,
-          payload: this.toJsonValue(kafkaMessage),
-        },
-      },
     };
   }
 
@@ -238,6 +210,21 @@ export class AlchemyWebhookIngestionService {
       process.env.AIVEN_KAFKA_TOPIC?.trim() ||
       'alchemy.webhooks'
     );
+  }
+
+  private async publishToKafka(
+    normalizedEvent: AlchemyWebhookEnvelope,
+    receivedAt: Date,
+  ): Promise<void> {
+    const kafkaMessage = this.buildKafkaMessage(normalizedEvent, receivedAt);
+
+    await this.kafkaService.publish({
+      topic: this.getKafkaTopic(),
+      key: normalizedEvent.eventId,
+      value: kafkaMessage,
+    });
+
+    this.logger.log(`Published Kafka message: eventId=${normalizedEvent.eventId}`);
   }
 
   private isDuplicateEventError(error: unknown): boolean {

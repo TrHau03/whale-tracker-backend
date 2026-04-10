@@ -1,5 +1,5 @@
 import { PrismaService } from '../prisma.service';
-import { OutboxProcessorService } from '../outbox/outbox-processor.service';
+import { AivenKafkaService } from '../kafka/aiven-kafka.service';
 import { AlchemyWebhookIngestionService } from './alchemy-webhook-ingestion.service';
 import { AlchemyWebhookNormalizerService } from './alchemy-webhook-normalizer.service';
 
@@ -7,8 +7,8 @@ describe('AlchemyWebhookIngestionService', () => {
   const normalizerService = {
     normalize: jest.fn(),
   };
-  const outboxProcessorService = {
-    processPendingMessages: jest.fn(),
+  const kafkaService = {
+    publish: jest.fn(),
   };
   const prismaService = {
     webhookEvent: {
@@ -25,16 +25,16 @@ describe('AlchemyWebhookIngestionService', () => {
     prismaService.webhookEvent.create.mockResolvedValue({
       id: 'db_event_1',
     });
-    outboxProcessorService.processPendingMessages.mockResolvedValue(1);
+    kafkaService.publish.mockResolvedValue(undefined);
 
     service = new AlchemyWebhookIngestionService(
       prismaService as unknown as PrismaService,
+      kafkaService as unknown as AivenKafkaService,
       normalizerService as unknown as AlchemyWebhookNormalizerService,
-      outboxProcessorService as unknown as OutboxProcessorService,
     );
   });
 
-  it('stores a new webhook event with nested activities and one outbox message', async () => {
+  it('stores a new webhook event with nested activities and publishes to kafka', async () => {
     normalizerService.normalize.mockReturnValue({
       eventId: 'whevt_1',
       webhookId: 'wh_1',
@@ -72,12 +72,6 @@ describe('AlchemyWebhookIngestionService', () => {
       data: expect.objectContaining({
         eventId: 'whevt_1',
         webhookId: 'wh_1',
-        outboxMessages: {
-          create: expect.objectContaining({
-            dedupeKey: 'alchemy:whevt_1',
-            messageKey: 'whevt_1',
-          }),
-        },
         activities: {
           createMany: {
             data: [
@@ -90,8 +84,10 @@ describe('AlchemyWebhookIngestionService', () => {
         },
       }),
     });
-    expect(outboxProcessorService.processPendingMessages).toHaveBeenCalledTimes(
-      1,
+    expect(kafkaService.publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: 'whevt_1',
+      }),
     );
   });
 
@@ -134,8 +130,6 @@ describe('AlchemyWebhookIngestionService', () => {
         },
       },
     });
-    expect(outboxProcessorService.processPendingMessages).toHaveBeenCalledTimes(
-      1,
-    );
+    expect(kafkaService.publish).not.toHaveBeenCalled();
   });
 });

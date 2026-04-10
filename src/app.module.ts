@@ -5,7 +5,6 @@ import { AlchemyWebhookNormalizerService } from './alchemy/alchemy-webhook-norma
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AivenKafkaService } from './kafka/aiven-kafka.service';
-import { OutboxProcessorService } from './outbox/outbox-processor.service';
 import { PrismaService } from './prisma.service';
 import { WebhookController } from './webhook.controller';
 
@@ -19,7 +18,6 @@ import { WebhookController } from './webhook.controller';
     AlchemyWebhookAuthService,
     AlchemyWebhookNormalizerService,
     AlchemyWebhookIngestionService,
-    OutboxProcessorService,
   ],
 })
 export class AppModule {}
